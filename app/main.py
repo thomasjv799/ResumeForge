@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import jd
+from app.api.v1 import Jd as jd
 from pathlib import Path
 
 VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
