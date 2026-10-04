@@ -16,6 +16,7 @@ LINKEDIN_URL = (
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.getenv("RUN_LIVE_JD_TESTS") != "1", reason="Set RUN_LIVE_JD_TESTS=1 to run the external LinkedIn smoke test")
 async def test_linkedin_live_scrape():
     result = await extract_jd(LINKEDIN_URL)
 
