@@ -1,3 +1,50 @@
+# ResumeForge — current implementation
+
+The repository now includes a React/TypeScript resume workspace and a conservative LaTeX parsing API. The original roadmap below describes future capabilities, not a list of completed features.
+
+## Quick start
+
+```sh
+uv sync --frozen
+cd frontend
+npm ci
+npm run build:backend
+cd ..
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Open http://127.0.0.1:8000 for the sample workspace and real parser. For frontend development, run `npm run dev` in `frontend/` while the API is running.
+
+### Available now
+
+- Interactive fictional sample with two jobs, per-edit accept/skip/undo, original/updated preview, role insights, and LaTeX export containing accepted changes only.
+- Real `POST /api/v1/resume/parse` endpoint accepting `{ "source": "...LaTeX..." }` (up to 200,000 characters).
+- Common section and bullet extraction, escaped characters, validation messages, and custom-command warnings. This is conservative text extraction, never TeX execution; review its output against the source.
+- Existing job-description extraction API from the `feat-jd-extraction` branch.
+
+The demo's scores and rewrites are samples, not AI analysis. PDF compilation, real AI rewriting, authentication, and persistence remain future work. The standalone Sites version includes the sample workspace only; real parsing requires the local Python API.
+
+### Tests
+
+```sh
+cd frontend
+npm ci
+npm run build
+npm test
+npm run lint
+npm run format:check
+cd ..
+uv run --frozen python -m pytest -q
+```
+
+The external LinkedIn smoke test is opt-in: install Playwright Chromium, then use `RUN_LIVE_JD_TESTS=1 uv run python -m pytest tests/test_linkedin_jd_extract.py`. It depends on live network access and LinkedIn availability.
+
+See [frontend/README.md](frontend/README.md) for design choices and verification limitations.
+
+---
+
+## Original product roadmap
+
 # 🎯 ResumeAlign AI
 ### *Intelligent Resume-to-Job Match Engine with Automated Application Intelligence*
 
