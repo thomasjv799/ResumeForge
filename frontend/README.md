@@ -13,7 +13,7 @@ Open http://127.0.0.1:4173. For the real resume parser, start the Python API on 
 
 ## Build
 
-- `npm run build`: standalone sample workspace suitable for static hosting. No API connection or real uploads.
+- `npm run build`: standalone upload and review flow suitable for static hosting. DOCX/TXT extraction happens in browser memory with no server upload. A separate fictional sample workspace remains available.
 - `npm run build:backend`: enables the real parser screen; serve `dist/` through the Python API.
 
 ## Verify
@@ -29,7 +29,11 @@ Vitest and Testing Library cover review decisions, keyboard focus after edits, r
 
 ## Boundaries
 
-The profile and jobs are fictional. Scores and rewrite suggestions are deterministic illustrations, not AI output or ATS assessments. Only accepted edits are exported. Decisions live in memory and reset on reload. The preview is a text layout, not compiled PDF. There are no accounts, persistence, real rewriting, or job scraping in the hosted sample.
+The upload flow reads real DOCX/TXT content (2 MB file limit, 100,000 text characters) and checks five essentials: email, overview, experience, education, and skills. The structure score gives each check 20 points; it does not assess writing quality or ATS performance. Users must allow editing before changing a separate text copy or downloading it. Discard restores the original extracted text. The score remains a snapshot of the original.
+
+Word text is rendered as plain text, never executable HTML. Embedded document instructions are treated as content. Headers, images, complex layouts and some Word variants may not extract completely. PDF, AI rewrites and formatted Word export are future work in `../TODO.md`. The supplied template is retained privately in the local checkout and is excluded from Git and deployed assets.
+
+The optional sample workspace uses fictional profiles and jobs, illustrative scores and canned rewrites. Only accepted sample edits are exported. All state lives in memory and resets on reload. No accounts or persistence are provided.
 
 ## Design
 

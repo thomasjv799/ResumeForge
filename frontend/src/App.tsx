@@ -1,524 +1,502 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
-import { AnimatePresence, motion, MotionConfig } from 'motion/react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion, MotionConfig, useReducedMotion } from 'motion/react'
 import {
-  ArrowDownToLine,
   ArrowRight,
-  ArrowUpRight,
-  Braces,
   Check,
-  CheckCheck,
-  ChevronRight,
-  CircleHelp,
-  Code2,
+  CheckCircle2,
   FileText,
-  Fingerprint,
   Layers2,
-  MapPin,
-  RotateCcw,
+  LockKeyhole,
   ShieldCheck,
   Sparkles,
-  Target,
-  X,
+  UploadCloud,
 } from 'lucide-react'
-import {
-  downloadText,
-  exportLatex,
-  initialDecisions,
-  reviewReducer,
-  roles,
-  scoreFor,
-} from './model'
-import type { Decision, RoleKey } from './model'
-import { ResumePaper, SuggestionCard, Insights } from './Review'
-import { Parser } from './Parser'
+import { assessResume, extractResume, validateFile } from './intake'
+import { downloadText } from './model'
 
-const parserEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_PARSER === 'true'
+const SampleStudio = lazy(() => import('./SampleStudio'))
+const stages = ['Reading your file', 'Extracting resume text', 'Checking resume structure']
+type Resume = { name: string; text: string; assessment: ReturnType<typeof assessResume> }
 
 export default function App() {
-  const [roleKey, setRoleKey] = useState<RoleKey>('backend')
-  const [state, dispatch] = useReducer(reviewReducer, undefined, initialDecisions)
-  const [mode, setMode] = useState<'studio' | 'parser'>('studio')
-  const [previewMode, setPreviewMode] = useState<'preview' | 'source'>('preview')
-  const [reviewMode, setReviewMode] = useState<'changes' | 'insights'>('changes')
-  const [showOriginal, setShowOriginal] = useState(false)
-  const [message, setMessage] = useState('')
-  const [dialogType, setDialogType] = useState<'about' | 'job'>('about')
-  const dialogRef = useRef<HTMLDialogElement>(null)
-  const role = roles[roleKey]
-  const decisions = state[roleKey]
-  const accepted = decisions.filter((value) => value === 'accepted').length
-  const reviewed = decisions.filter((value) => value !== 'pending').length
-  const score = scoreFor(roleKey, decisions)
-  useEffect(() => {
-    if (!message) return
-    const timeout = setTimeout(() => setMessage(''), 4500)
-    return () => clearTimeout(timeout)
-  }, [message])
-  function openDialog(type: 'about' | 'job') {
-    setDialogType(type)
-    dialogRef.current?.showModal()
+  const [view, setView] = useState<'upload' | 'processing' | 'results' | 'sample'>('upload')
+  const [stage, setStage] = useState(0)
+  const [resume, setResume] = useState<Resume | null>(null)
+  const [error, setError] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [dragging, setDragging] = useState(false)
+  const [notice, setNotice] = useState('')
+  const request = useRef(0)
+  const input = useRef<HTMLInputElement>(null)
+  const heading = useRef<HTMLHeadingElement>(null)
+  const reduced = useReducedMotion()
+  useEffect(
+    () => () => {
+      request.current++
+    },
+    [],
+  )
+
+  function restart() {
+    request.current++
+    setResume(null)
+    setDraft('')
+    setEditing(false)
+    setError('')
+    setNotice('')
+    setView('upload')
   }
-  function decide(index: number, decision: Decision) {
-    dispatch({ type: 'decide', role: roleKey, index, decision })
-    setMessage(
-      decision === 'accepted'
-        ? 'Edit accepted. Your preview and export are updated.'
-        : decision === 'skipped'
-          ? 'Original wording kept.'
-          : 'Decision undone. Original wording restored.',
+  async function upload(file?: File) {
+    if (!file) return
+    const id = ++request.current
+    setError('')
+    setDragging(false)
+    try {
+      validateFile(file)
+      setStage(0)
+      setView('processing')
+      const pause = () => new Promise((resolve) => setTimeout(resolve, reduced ? 0 : 450))
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      await pause()
+      if (request.current !== id) return
+      setStage(1)
+      await pause()
+      const text = extractResume(bytes, file.name)
+      if (request.current !== id) return
+      setStage(2)
+      const assessment = assessResume(text)
+      await pause()
+      if (request.current !== id) return
+      setResume({ name: file.name, text, assessment })
+      setDraft(text)
+      setEditing(false)
+      setView('results')
+    } catch (cause) {
+      if (request.current !== id) return
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'We could not read this file. Try another Word or text resume.',
+      )
+      setView('upload')
+    }
+  }
+  if (view === 'sample')
+    return (
+      <>
+        <div className="border-b border-line bg-accent-soft px-5 py-3 text-sm">
+          <button className="btn" onClick={restart}>
+            ← Back to upload
+          </button>
+          <span className="ml-4">Fictional sample · no uploaded resume used</span>
+        </div>
+        <Suspense
+          fallback={
+            <p className="p-8" role="status">
+              Opening sample…
+            </p>
+          }
+        >
+          <SampleStudio />
+        </Suspense>
+      </>
     )
-  }
-  function reset() {
-    dispatch({ type: 'reset' })
-    setRoleKey('backend')
-    setReviewMode('changes')
-    setPreviewMode('preview')
-    setShowOriginal(false)
-    setMessage('Workspace reset. All original wording restored.')
-  }
-  function download() {
-    downloadText(exportLatex(roleKey, decisions), `alex-rivera-${roleKey}-sample.tex`)
-    setMessage('Downloaded your sample resume with accepted edits only.')
-  }
+  const score = resume?.assessment.score ?? 0
   return (
     <MotionConfig reducedMotion="user">
-      <a
-        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded focus:bg-white focus:p-4"
-        href="#main"
-      >
-        Skip to workspace
+      <a className="sr-only focus:not-sr-only focus:p-4" href="#main">
+        Skip to content
       </a>
       <header className="border-b border-line bg-white">
-        <div className="mx-auto flex h-[76px] max-w-[1440px] items-center justify-between gap-4 px-5 sm:px-8 lg:px-12">
-          <a
-            href="#"
-            onClick={() => setMode('studio')}
-            className="flex items-center gap-2.5 text-lg font-semibold tracking-[-0.8px]"
+        <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-5 sm:px-10">
+          <button
+            onClick={restart}
             aria-label="ResumeForge home"
+            className="flex items-center gap-3 text-lg font-semibold tracking-tight"
           >
-            <span className="grid size-9 place-items-center rounded-lg bg-ink text-white">
-              <Layers2 size={21} />
+            <span className="grid size-10 place-items-center rounded-xl bg-ink text-white">
+              <Layers2 size={22} />
             </span>
             ResumeForge
-            <span className="ml-1 hidden rounded border border-line px-1.5 py-0.5 text-[9px] font-medium tracking-wide text-muted sm:block">
-              STUDIO
-            </span>
-          </a>
-          <nav aria-label="Main navigation" className="hidden self-stretch sm:flex">
-            <button
-              onClick={() => setMode('studio')}
-              className={`mx-4 border-b-2 px-1 text-sm ${mode === 'studio' ? 'border-accent font-medium' : 'border-transparent text-muted'}`}
-            >
-              Workspace
-            </button>
-            {parserEnabled && (
-              <button
-                onClick={() => setMode('parser')}
-                className={`mx-4 border-b-2 px-1 text-sm ${mode === 'parser' ? 'border-accent font-medium' : 'border-transparent text-muted'}`}
-              >
-                Resume parser
-              </button>
-            )}
-          </nav>
-          <div className="flex items-center gap-3">
-            <span className="hidden rounded-full border border-[#ddd4ff] bg-[#f7f4ff] px-3 py-1.5 text-[11px] font-medium text-accent md:inline-flex">
-              Sample workspace
-            </span>
-            <button
-              className="grid size-10 place-items-center rounded-lg text-muted hover:bg-gray-100"
-              aria-label="About this demo"
-              onClick={() => openDialog('about')}
-            >
-              <CircleHelp size={19} />
-            </button>
-            <span
-              className="grid size-9 place-items-center rounded-full border-2 border-white bg-[#e8e1fd] text-xs font-semibold text-[#5c40b0] ring-1 ring-line"
-              aria-label="Alex Rivera, fictional profile"
-            >
-              AR
-            </span>
-          </div>
+            <span className="hidden text-xs font-normal text-muted sm:inline">/ studio</span>
+          </button>
+          <span className="flex items-center gap-2 text-xs text-muted">
+            <LockKeyhole size={14} />{' '}
+            <span className="hidden sm:inline">Your resume stays in this browser</span>
+            <span className="sm:hidden">Browser only</span>
+          </span>
         </div>
       </header>
-      <main id="main" className="mx-auto max-w-[1440px] px-4 pt-7 pb-5 sm:px-8 lg:px-12">
-        {parserEnabled && (
-          <div className="mb-5 flex gap-2 sm:hidden">
-            <button className="btn" onClick={() => setMode('studio')}>
-              Workspace
-            </button>
-            <button className="btn" onClick={() => setMode('parser')}>
-              Resume parser
-            </button>
-          </div>
-        )}
-        {parserEnabled && (
-          <div hidden={mode !== 'parser'}>
-            <Parser />
-          </div>
-        )}
-        <div hidden={mode !== 'studio'}>
-          <div className="mb-7 flex flex-wrap items-end justify-between gap-5">
-            <div>
-              <div className="mb-3 flex items-center gap-2 text-[11px] text-muted">
-                <span>YOUR CAREER</span>
-                <ChevronRight size={12} />
-                <span className="font-medium text-accent">RESUME STUDIO</span>
-              </div>
-              <h1 className="text-[30px] font-semibold tracking-[-1.4px] sm:text-[37px]">
-                Your experience. <span className="text-accent">Better expressed.</span>
-              </h1>
-              <p className="mt-2 text-sm leading-6 text-muted">
-                A little more relevant. Every bit as you.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button className="btn !px-3" aria-label="Reset demo" onClick={reset}>
-                <RotateCcw size={16} />
-                <span className="hidden sm:inline">Reset</span>
-              </button>
-              <button className="btn-primary" onClick={download}>
-                <ArrowDownToLine size={16} />
-                Export resume
-                <ArrowUpRight className="ml-1" size={14} />
-              </button>
-            </div>
-          </div>
-          <section
-            className="panel mb-7 grid overflow-hidden md:grid-cols-[1fr_auto_1.2fr]"
-            aria-label="Resume and target opportunity"
-          >
-            <div className="flex items-center gap-4 p-5">
-              <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#f1eefb] text-accent">
-                <FileText size={22} />
-              </div>
-              <div className="min-w-0">
-                <p className="eyebrow text-muted">Your starting point</p>
-                <h2 className="mt-1.5 truncate text-sm font-medium">alex_rivera_resume.tex</h2>
-                <p className="mt-1 text-xs text-muted">
-                  LaTeX <span className="px-1.5">·</span> 4 sections{' '}
-                  <span className="px-1.5">·</span> Fictional sample
-                </p>
-              </div>
-              <span className="ml-auto hidden items-center gap-1.5 rounded-full bg-[#edf6f1] px-2.5 py-1 text-[10px] font-medium text-[#246847] lg:flex">
-                <Check size={12} />
-                Ready
-              </span>
-            </div>
-            <div className="hidden items-center px-5 text-gray-400 md:flex">
-              <ArrowRight size={20} />
-            </div>
-            <div className="flex items-center gap-4 border-t border-line p-5 md:border-t-0">
-              <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#232332] text-white">
-                <span className="text-2xl font-light">
-                  {roleKey === 'backend' ? 'n' : 'c'}
-                  <span className="text-[#b5a0ff]">.</span>
-                </span>
-              </div>
-              <div className="min-w-0 flex-1">
-                <label htmlFor="role" className="eyebrow text-muted">
-                  Your next opportunity
-                </label>
-                <select
-                  id="role"
-                  className="mt-1 block w-full max-w-full truncate bg-transparent py-1 text-sm font-medium"
-                  value={roleKey}
-                  onChange={(event) => {
-                    setRoleKey(event.target.value as RoleKey)
-                    setMessage('Sample role changed. Decisions are saved separately for each role.')
-                  }}
-                >
-                  <option value="backend">Backend Engineer · Northstar</option>
-                  <option value="fullstack">Full Stack Engineer · Common Ground</option>
-                </select>
-                <p className="mt-0.5 flex items-center gap-1 text-xs text-muted">
-                  <MapPin size={11} />
-                  {role.location}
-                </p>
-              </div>
-              <button
-                className="grid size-10 shrink-0 place-items-center rounded-lg hover:bg-gray-100"
-                aria-label="View sample job"
-                onClick={() => openDialog('job')}
+      <main id="main" className="mx-auto max-w-7xl px-5 py-10 sm:px-10 sm:py-14">
+        <ol aria-label="Resume review progress" className="mb-12 flex max-w-xl gap-3 sm:gap-8">
+          {['Upload resume', 'Understand it', 'Make it yours'].map((label, index) => {
+            const current = view === 'upload' ? 0 : view === 'processing' ? 1 : 2
+            return (
+              <li
+                key={label}
+                aria-current={index === current ? 'step' : undefined}
+                className={`flex items-center gap-2 text-[11px] sm:text-xs ${index === current ? 'font-semibold text-accent' : 'text-muted'}`}
               >
-                <ArrowUpRight size={18} />
-              </button>
-            </div>
-          </section>
-          <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,.92fr)_minmax(0,1.08fr)]">
-            <section
-              className="order-2 min-w-0 lg:order-1 lg:sticky lg:top-6"
-              aria-label="Resume document"
-            >
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-sm font-semibold">
-                  <FileText size={16} className="text-muted" />
-                  Your resume
-                </h2>
-                <span className="flex items-center gap-1.5 text-[11px] text-muted">
-                  <span className="size-1.5 rounded-full bg-accent" />
-                  Updates with accepted edits
+                <span
+                  className={`grid size-7 shrink-0 place-items-center rounded-full border ${index <= current ? 'border-accent bg-accent text-white' : 'border-line bg-white'}`}
+                >
+                  {index < current ? <Check size={13} /> : `0${index + 1}`}
                 </span>
-              </div>
-              <div className="overflow-hidden rounded-xl border border-[#dddde7] bg-[#eaeaf0]">
-                <div className="flex items-center justify-between border-b border-[#dcdce5] bg-[#f3f3f7] px-4 py-2">
-                  <div className="flex gap-1" aria-label="Document view">
-                    {(['preview', 'source'] as const).map((item) => (
-                      <button
-                        key={item}
-                        aria-pressed={previewMode === item}
-                        onClick={() => setPreviewMode(item)}
-                        className={`flex min-h-10 items-center gap-2 rounded-md px-3 text-xs font-medium ${previewMode === item ? 'bg-white text-ink shadow-sm' : 'text-muted hover:bg-white/50'}`}
-                      >
-                        {item === 'preview' ? <FileText size={14} /> : <Code2 size={14} />}{' '}
-                        {item === 'preview' ? 'Preview' : 'LaTeX'}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    onClick={() => setShowOriginal(!showOriginal)}
-                    aria-pressed={showOriginal}
-                    className="flex min-h-10 items-center gap-2 rounded-md px-2 text-[11px] font-medium text-muted hover:bg-white/50"
+                {label}
+              </li>
+            )
+          })}
+        </ol>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={view}
+            initial={{ opacity: 0, y: reduced ? 0 : 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduced ? 0 : 0.2 }}
+            onAnimationComplete={() => heading.current?.focus()}
+          >
+            {view === 'upload' && (
+              <div className="grid gap-12 lg:grid-cols-[1.3fr_.7fr] lg:gap-20">
+                <section>
+                  <p className="eyebrow mb-4 text-accent">A stronger next chapter</p>
+                  <h1
+                    ref={heading}
+                    tabIndex={-1}
+                    className="max-w-xl text-4xl leading-[1.15] font-semibold tracking-[-1.8px] outline-none sm:text-5xl"
                   >
-                    <span
-                      className={`relative h-4 w-7 rounded-full transition-colors ${showOriginal ? 'bg-accent' : 'bg-[#c9c9d5]'}`}
-                    >
-                      <span
-                        className={`absolute top-0.5 size-3 rounded-full bg-white transition-transform ${showOriginal ? 'translate-x-3.5' : 'translate-x-0.5'}`}
-                      />
-                    </span>
-                    Original
-                  </button>
-                </div>
-                <div className="p-4 sm:p-6">
-                  {previewMode === 'preview' ? (
-                    <ResumePaper
-                      roleKey={roleKey}
-                      decisions={decisions}
-                      showOriginal={showOriginal}
-                    />
-                  ) : (
-                    <pre
-                      aria-label="LaTeX source"
-                      className="min-h-[575px] overflow-auto rounded-lg bg-[#242333] p-5 font-mono text-[11px] leading-6 whitespace-pre-wrap break-words text-[#d5cef3]"
-                    >
-                      {exportLatex(
-                        roleKey,
-                        showOriginal ? ['pending', 'pending', 'pending'] : decisions,
-                      )}
-                    </pre>
-                  )}
-                </div>
-                <div className="flex items-center justify-between px-5 pb-4 text-[10px] text-muted">
-                  <span>
-                    {showOriginal
-                      ? 'Original source'
-                      : `${accepted} accepted edit${accepted === 1 ? '' : 's'}`}
-                  </span>
-                  <span>Text preview · Not a PDF rendering</span>
-                </div>
-              </div>
-              <div className="mt-4 flex items-start gap-2 px-1 text-xs leading-6 text-muted">
-                <ShieldCheck className="mt-1 shrink-0 text-accent" size={15} />
-                <p>Your facts stay yours. Only the wording changes.</p>
-              </div>
-            </section>
-            <section className="order-1 min-w-0 lg:order-2" aria-label="Review suggestions">
-              <div className="mb-5 overflow-hidden rounded-xl bg-[#252334] text-white">
-                <div className="flex items-center justify-between gap-5 px-6 py-5">
-                  <div>
-                    <p className="eyebrow text-[#c7beda]">Alignment snapshot</p>
-                    <div className="mt-3 flex flex-wrap items-baseline gap-2.5">
-                      <span
-                        className="text-4xl font-semibold tracking-[-2px]"
-                        aria-label={`Illustrative score ${score}`}
-                      >
-                        {score}
-                      </span>
-                      <span className="text-sm text-[#bcb7ce]">/ 100</span>
-                      <span className="ml-2 rounded-full bg-[#b8a4ff]/15 px-2.5 py-1 text-xs font-medium text-[#d7caff]">
-                        {score > 64 ? `+${score - 64} from edits` : 'Before review'}
-                      </span>
+                    Great experience.
+                    <br />
+                    <span className="text-accent">Let’s make it read that way.</span>
+                  </h1>
+                  <p className="mt-5 max-w-lg text-base leading-7 text-muted">
+                    Start with the resume you already have. See what’s there, find what needs
+                    attention, and decide what changes.
+                  </p>
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      setDragging(true)
+                    }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      void upload(e.dataTransfer.files[0])
+                    }}
+                    className={`mt-8 rounded-2xl border-2 border-dashed p-8 text-center transition-colors sm:p-12 ${dragging ? 'border-accent bg-accent-soft' : 'border-[#c9c3dc] bg-white'}`}
+                  >
+                    <div className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl bg-accent-soft text-accent">
+                      <UploadCloud size={29} strokeWidth={1.5} />
                     </div>
-                    <p className="mt-3 text-xs text-[#c4bed4]">
-                      Illustrative demo score. Not an ATS assessment.
+                    <h2 className="text-lg font-semibold">Drop your resume here</h2>
+                    <p id="upload-help" className="mt-2 text-sm text-muted">
+                      Word (.docx) or plain text · up to 2 MB
                     </p>
-                  </div>
-                  <div className="relative grid size-24 shrink-0 place-items-center">
-                    <svg
-                      className="absolute inset-0 -rotate-90"
-                      viewBox="0 0 100 100"
-                      aria-hidden="true"
-                    >
-                      <circle cx="50" cy="50" r="40" fill="none" stroke="#454052" strokeWidth="5" />
-                      <motion.circle
-                        initial={false}
-                        cx="50"
-                        cy="50"
-                        r="40"
-                        fill="none"
-                        stroke="#b5a0ff"
-                        strokeWidth="5"
-                        strokeLinecap="round"
-                        strokeDasharray="251.33"
-                        animate={{ strokeDashoffset: 251.33 * (1 - score / 100) }}
-                        transition={{ duration: 0.4 }}
-                      />
-                    </svg>
-                    <Sparkles className="text-[#c4b3ff]" size={27} />
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 px-6 py-3 text-[11px] text-[#cdc7de]">
-                  <span>3 opportunities to sharpen your story</span>
-                  <span className="text-[#d1c1ff]">Up to 88 with all edits</span>
-                </div>
-              </div>
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <div
-                  className="flex gap-1 rounded-lg border border-line bg-[#ebebf1] p-1"
-                  aria-label="Review view"
-                >
-                  <button
-                    aria-pressed={reviewMode === 'changes'}
-                    onClick={() => setReviewMode('changes')}
-                    className={`min-h-10 rounded-md px-3 text-xs font-medium ${reviewMode === 'changes' ? 'bg-white shadow-sm' : 'text-muted'}`}
-                  >
-                    Suggested edits{' '}
-                    <span className="ml-1.5 rounded bg-accent-soft px-1.5 py-0.5 text-[10px] text-accent">
-                      3
-                    </span>
-                  </button>
-                  <button
-                    aria-pressed={reviewMode === 'insights'}
-                    onClick={() => setReviewMode('insights')}
-                    className={`min-h-10 rounded-md px-3 text-xs font-medium ${reviewMode === 'insights' ? 'bg-white shadow-sm' : 'text-muted'}`}
-                  >
-                    Role insights
-                  </button>
-                </div>
-                <button
-                  disabled={reviewed === 3}
-                  className="flex min-h-10 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-accent hover:bg-accent-soft"
-                  onClick={() => {
-                    dispatch({ type: 'acceptRemaining', role: roleKey })
-                    setMessage(
-                      'Remaining edits accepted. Skipped suggestions keep the original wording.',
-                    )
-                  }}
-                >
-                  <CheckCheck size={15} />
-                  Accept remaining
-                </button>
-              </div>
-              {reviewMode === 'changes' ? (
-                <div className="space-y-4">
-                  {role.suggestions.map((suggestion, index) => (
-                    <SuggestionCard
-                      key={`${roleKey}-${index}`}
-                      suggestion={suggestion}
-                      index={index}
-                      decision={decisions[index]}
-                      onDecide={decide}
+                    <input
+                      ref={input}
+                      type="file"
+                      accept=".docx,.txt"
+                      aria-label="Upload resume"
+                      aria-describedby="upload-help upload-error"
+                      className="sr-only"
+                      onChange={(e) => {
+                        void upload(e.target.files?.[0])
+                        e.target.value = ''
+                      }}
                     />
-                  ))}
-                </div>
-              ) : (
-                <Insights role={role} />
-              )}
-              <div className="mt-5 flex items-center gap-3 px-1">
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#e5e2ee]">
+                    <button
+                      className="btn-primary mx-auto mt-6"
+                      onClick={() => input.current?.click()}
+                    >
+                      Choose a resume <ArrowRight size={16} />
+                    </button>
+                  </div>
+                  <p
+                    id="upload-error"
+                    role={error ? 'alert' : undefined}
+                    className="mt-3 text-sm text-red-700"
+                  >
+                    {error}
+                  </p>
+                  <p className="mt-4 text-center text-xs text-muted">
+                    Just exploring?{' '}
+                    <button
+                      className="min-h-10 px-2 font-medium text-accent underline underline-offset-4"
+                      onClick={() => setView('sample')}
+                    >
+                      Try the sample workspace
+                    </button>
+                  </p>
+                </section>
+                <aside className="lg:pt-12">
+                  <div className="rounded-2xl bg-[#252334] p-8 text-white">
+                    <p className="eyebrow text-[#c7beda]">Thoughtful by design</p>
+                    <h2 className="mt-4 text-2xl font-medium tracking-tight">
+                      Your story.
+                      <br />
+                      You stay in control.
+                    </h2>
+                    <div className="mt-8 space-y-7">
+                      {[
+                        [
+                          FileText,
+                          'Understand first',
+                          'We extract the text and check five essentials in your resume.',
+                        ],
+                        [
+                          Sparkles,
+                          'See what could improve',
+                          'Get a transparent structure score and practical suggestions.',
+                        ],
+                        [
+                          ShieldCheck,
+                          'Nothing changes without you',
+                          'Choose whether to open an editable copy. Your original stays intact.',
+                        ],
+                      ].map(([Icon, title, copy]) => {
+                        const Symbol = Icon as typeof FileText
+                        return (
+                          <div key={String(title)} className="flex gap-4">
+                            <Symbol size={20} className="mt-1 shrink-0 text-[#c4b3ff]" />
+                            <div>
+                              <h3 className="text-sm font-medium">{String(title)}</h3>
+                              <p className="mt-2 text-xs leading-6 text-[#ccc6db]">
+                                {String(copy)}
+                              </p>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  <p className="mt-5 px-2 text-xs leading-6 text-muted">
+                    Text extraction runs locally. Files are not uploaded to a server or saved after
+                    you leave. PDF and formatted Word export are planned.
+                  </p>
+                </aside>
+              </div>
+            )}
+            {view === 'processing' && (
+              <section className="mx-auto max-w-xl py-10 text-center" aria-busy="true">
+                <div className="relative mx-auto mb-8 grid size-24 place-items-center rounded-3xl bg-accent-soft text-accent">
+                  <FileText size={38} strokeWidth={1.4} />
                   <motion.div
-                    className="h-full bg-accent"
-                    animate={{ width: `${(reviewed / 3) * 100}%` }}
-                    transition={{ duration: 0.2 }}
+                    className="absolute inset-0 rounded-3xl border-2 border-accent"
+                    animate={reduced ? {} : { opacity: [0.2, 1, 0.2], scale: [1, 1.07, 1] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
                   />
                 </div>
-                <p className="text-xs text-muted" aria-live="polite">
-                  {reviewed} of 3 reviewed
-                </p>
-              </div>
-            </section>
-          </div>
-          <div className="mt-8 flex flex-col items-start justify-between gap-4 border-t border-line pt-5 text-xs text-muted sm:flex-row">
-            <p className="flex items-center gap-2">
-              <Fingerprint size={16} />
-              Fictional profile. Sample suggestions. Real interactions.
-            </p>
-            <button
-              className="flex min-h-10 items-center gap-1 font-medium hover:text-accent"
-              onClick={() => openDialog('about')}
-            >
-              About this workspace
-              <ArrowUpRight size={13} />
-            </button>
-          </div>
-        </div>
-      </main>
-      <AnimatePresence>
-        {message && (
-          <motion.div
-            role="status"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 8 }}
-            className="fixed right-4 bottom-5 left-4 z-40 mx-auto flex w-fit max-w-[min(90vw,520px)] items-center gap-3 rounded-xl border border-white/10 bg-ink px-5 py-4 text-sm leading-6 text-white shadow-xl"
-          >
-            <Check className="shrink-0 text-[#bfaaff]" size={18} />
-            {message}
+                <h1
+                  ref={heading}
+                  tabIndex={-1}
+                  className="text-3xl font-semibold tracking-tight outline-none"
+                >
+                  Getting to know your resume.
+                </h1>
+                <p className="mt-3 text-sm text-muted">A little clarity before the next step.</p>
+                <div role="status" aria-live="polite" className="sr-only">
+                  {stages[stage]}
+                </div>
+                <ol className="panel mt-8 divide-y divide-line text-left">
+                  {stages.map((label, index) => (
+                    <li
+                      key={label}
+                      className={`flex items-center gap-3 p-5 text-sm ${index > stage ? 'text-muted' : 'text-ink'}`}
+                    >
+                      <span
+                        className={`grid size-7 place-items-center rounded-full ${index <= stage ? 'bg-accent-soft text-accent' : 'bg-gray-100'}`}
+                      >
+                        {index < stage ? <Check size={15} /> : index + 1}
+                      </span>
+                      {label}
+                      {index === stage && (
+                        <span className="ml-auto text-xs text-accent">In progress</span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+                <button className="btn mx-auto mt-6" onClick={restart}>
+                  Cancel
+                </button>
+              </section>
+            )}
+            {view === 'results' && resume && (
+              <section>
+                <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+                  <div>
+                    <p className="eyebrow mb-3 text-accent">Your starting point, understood</p>
+                    <h1
+                      ref={heading}
+                      tabIndex={-1}
+                      className="text-3xl font-semibold tracking-tight outline-none sm:text-4xl"
+                    >
+                      A clearer picture. A stronger resume.
+                    </h1>
+                    <p className="mt-3 max-w-xl truncate text-sm text-muted">
+                      {resume.name} · {resume.assessment.words} words extracted
+                    </p>
+                  </div>
+                  <button className="btn" onClick={restart}>
+                    Upload another resume
+                  </button>
+                </div>
+                <div className="grid items-start gap-6 lg:grid-cols-[.8fr_1.2fr]">
+                  <div className="space-y-5">
+                    <div className="rounded-2xl bg-[#252334] p-7 text-white">
+                      <p className="eyebrow text-[#c7beda]">Structure score</p>
+                      <div className="mt-4 flex items-baseline gap-2">
+                        <span className="text-6xl font-semibold tracking-tighter">{score}</span>
+                        <span className="text-[#ccc6db]">/ 100</span>
+                      </div>
+                      <p className="mt-4 text-sm leading-6 text-[#ccc6db]">
+                        {score / 20} of 5 essentials detected. Each is worth 20 points.
+                      </p>
+                      <p className="mt-3 border-t border-white/15 pt-3 text-xs leading-5 text-[#ccc6db]">
+                        A heading and email check of the original text, not an ATS rating or a
+                        measure of content quality. Text extraction can miss layout details.
+                      </p>
+                    </div>
+                    <div className="panel p-6">
+                      <h2 className="font-semibold">What we found</h2>
+                      <ul className="mt-5 space-y-5">
+                        {resume.assessment.checks.map((check) => (
+                          <li key={check.label} className="flex gap-3">
+                            {check.passed ? (
+                              <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-[#246847]" />
+                            ) : (
+                              <span className="mt-0.5 grid size-[18px] shrink-0 place-items-center rounded-full bg-amber-100 text-xs text-amber-800">
+                                !
+                              </span>
+                            )}
+                            <div>
+                              <h3 className="text-sm font-medium">{check.label}</h3>
+                              <p className="mt-1 text-xs leading-5 text-muted">
+                                {check.passed ? 'Detected in your resume.' : check.tip}
+                              </p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="min-w-0 space-y-5">
+                    <div className="rounded-2xl border border-[#d8cdfa] bg-accent-soft p-6">
+                      <div className="flex items-start gap-3">
+                        <ShieldCheck size={22} className="shrink-0 text-accent" />
+                        <div>
+                          <h2 className="font-semibold">
+                            {editing
+                              ? 'You’re editing a separate copy.'
+                              : 'Would you like to edit your resume?'}
+                          </h2>
+                          <p className="mt-2 text-sm leading-6 text-muted">
+                            {editing
+                              ? 'Make your changes below. Download when you’re ready, or discard them to restore the original text.'
+                              : 'Review the suggestions first. Allow editing to open a text copy you control. We won’t rewrite or add any facts automatically.'}
+                          </p>
+                          <div className="mt-4 flex flex-wrap gap-3">
+                            {editing ? (
+                              <>
+                                <button
+                                  className="btn-primary"
+                                  onClick={() => {
+                                    downloadText(
+                                      draft,
+                                      resume.name.replace(/\.(docx|txt)$/i, '') + '-edited.txt',
+                                    )
+                                    setNotice(
+                                      'Text copy downloaded. Word template formatting is not included yet.',
+                                    )
+                                  }}
+                                >
+                                  Download text copy
+                                </button>
+                                <button
+                                  className="btn"
+                                  onClick={() => {
+                                    setDraft(resume.text)
+                                    setEditing(false)
+                                    setNotice('Changes discarded. Original text restored.')
+                                  }}
+                                >
+                                  Discard changes
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className="btn-primary"
+                                  onClick={() => {
+                                    setEditing(true)
+                                    setNotice('Editing enabled. Your original file is unchanged.')
+                                  }}
+                                >
+                                  Allow editing <ArrowRight size={15} />
+                                </button>
+                                <button
+                                  className="btn"
+                                  onClick={() =>
+                                    setNotice(
+                                      'Kept read-only. You can allow editing whenever you’re ready.',
+                                    )
+                                  }
+                                >
+                                  Keep read-only
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="panel overflow-hidden">
+                      <div className="flex items-center justify-between border-b border-line px-6 py-4">
+                        <h2 className="text-sm font-semibold">
+                          {editing ? 'Your editable copy' : 'Extracted resume text'}
+                        </h2>
+                        <span className="text-xs text-muted">
+                          {editing ? 'Unsaved · text only' : 'Read-only'}
+                        </span>
+                      </div>
+                      {editing ? (
+                        <div className="p-5">
+                          <label htmlFor="resume-copy" className="sr-only">
+                            Edit resume text
+                          </label>
+                          <textarea
+                            autoFocus
+                            id="resume-copy"
+                            className="min-h-[520px] w-full resize-y rounded-lg border border-line bg-white p-4 text-sm leading-7"
+                            value={draft}
+                            maxLength={100_000}
+                            onChange={(e) => setDraft(e.target.value)}
+                          />
+                        </div>
+                      ) : (
+                        <pre className="max-h-[620px] overflow-auto p-6 font-sans text-sm leading-7 whitespace-pre-wrap break-words">
+                          {resume.text}
+                        </pre>
+                      )}
+                    </div>
+                    <p role="status" className="text-sm text-accent">
+                      {notice}
+                    </p>
+                    <p className="text-xs leading-6 text-muted">
+                      Next: apply approved text to a professional Word template. For now, downloads
+                      contain plain text only.
+                    </p>
+                  </div>
+                </div>
+              </section>
+            )}
           </motion.div>
-        )}
-      </AnimatePresence>
-      <dialog
-        ref={dialogRef}
-        className="fixed inset-0 m-auto w-[calc(100%-32px)] max-w-lg rounded-2xl border border-line bg-white p-7 text-ink shadow-2xl"
-        aria-labelledby="dialog-title"
-      >
-        <button
-          className="absolute top-3 right-3 grid size-10 place-items-center rounded-lg text-muted hover:bg-gray-100"
-          aria-label="Close dialog"
-          onClick={() => dialogRef.current?.close()}
-        >
-          <X size={19} />
-        </button>
-        <div className="mb-5 grid size-12 place-items-center rounded-xl bg-accent-soft text-accent">
-          {dialogType === 'job' ? <Target size={23} /> : <Braces size={23} />}
-        </div>
-        <p className="eyebrow text-accent">
-          {dialogType === 'job' ? 'Fictional sample job' : 'Interactive prototype'}
-        </p>
-        <h2 id="dialog-title" className="mt-3 mb-4 text-2xl font-semibold tracking-tight">
-          {dialogType === 'job'
-            ? `${role.title} at ${role.company}`
-            : 'A workspace for your next chapter.'}
-        </h2>
-        {dialogType === 'job' ? (
-          <>
-            <p className="text-sm leading-7 text-muted">{role.description}</p>
-            <ul className="mt-5 space-y-3">
-              {role.requirements.map((requirement) => (
-                <li key={requirement} className="flex items-center gap-2 text-sm">
-                  <Check size={15} className="text-accent" />
-                  {requirement}
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          <div className="space-y-4 text-sm leading-7 text-muted">
-            <p>
-              Compare suggestions, keep the ones you like, and export your reviewed LaTeX resume.
-              Decisions are kept separately for each sample role until you reload or reset.
-            </p>
-            <p>
-              Alex and both jobs are fictional. Suggestions and scores are illustrative; this demo
-              doesn’t call AI, upload resumes, scrape jobs, or compile PDFs.
-            </p>
-            <p>
-              The local app also includes a working LaTeX resume parser. Accepted edits are the only
-              changes included in your export.
-            </p>
-          </div>
-        )}
-      </dialog>
+        </AnimatePresence>
+        <footer className="mt-14 flex flex-wrap justify-between gap-3 border-t border-line pt-6 text-xs text-muted">
+          <span>ResumeForge · A little more clarity. Every bit as you.</span>
+          <span>Read first. Edit with permission.</span>
+        </footer>
+      </main>
     </MotionConfig>
   )
 }
